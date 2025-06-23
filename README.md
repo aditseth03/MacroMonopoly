@@ -36,45 +36,51 @@ After each round of player turns, the economic model updates using three core eq
 
 #### 1. The IS Curve (Determines Economic Activity)
 
-This equation decides the level of economic activity (`y`) for the current turn. It says that economic activity will be higher if the *real interest rate* (the nominal interest rate `i` minus last turn's inflation `π`) was low, and vice-versa.
+This equation decides the level of economic activity (`$y_t$`) for the current turn. It says that economic activity will be higher if the *real interest rate* (the nominal interest rate `$i_{t-1}$` minus last turn's inflation `$\pi_{t-1}$`) was low, and vice-versa.
 
-\[ y_t = \bar{y} - \sigma(i_{t-1} - \pi_{t-1} - \bar{r}) + \epsilon_y \]
+```math
+y_t = \bar{y} - \sigma(i_{t-1} - \pi_{t-1} - \bar{r}) + \epsilon_y
+```
 
-- \(y_t\): Economic activity this turn.
-- \(\bar{y}\): The economy's long-run potential output (100).
-- \(\sigma\): How sensitive the economy is to interest rate changes (1.0).
-- \(i_{t-1}\): The interest rate from the *previous* turn.
-- \(\pi_{t-1}\): The inflation rate from the *previous* turn.
-- \(\bar{r}\): The "natural" real rate of interest (2%).
-- \(\epsilon_y\): A random shock to the economy (from -0.5 to +0.5).
+- `$y_t$`: Economic activity this turn.
+- `$\bar{y}$`: The economy's long-run potential output (100).
+- `$\sigma$`: How sensitive the economy is to interest rate changes (1.0).
+- `$i_{t-1}$`: The interest rate from the *previous* turn.
+- `$\pi_{t-1}$`: The inflation rate from the *previous* turn.
+- `$\bar{r}$`: The "natural" real rate of interest (2%).
+- `$\epsilon_y$`: A random shock to the economy (from -0.5 to +0.5).
 
 #### 2. The Phillips Curve (Determines Inflation)
 
-This equation sets the inflation rate (`π`) for the current turn. It says that inflation depends on what it was last turn and whether the economy is "booming" or in a "slump."
+This equation sets the inflation rate (`$\pi_t$`) for the current turn. It says that inflation depends on what it was last turn and whether the economy is "booming" or in a "slump."
 
-\[ \pi_t = \beta \pi_{t-1} + \kappa(y_t - \bar{y}) + \epsilon_\pi \]
+```math
+\pi_t = \beta \pi_{t-1} + \kappa(y_t - \bar{y}) + \epsilon_\pi
+```
 
-- \(\pi_t\): Inflation this turn.
-- \(\beta\): How "sticky" or persistent inflation is (0.60).
-- \(\pi_{t-1}\): Inflation from the *previous* turn.
-- \(\kappa\): How much a booming/slumping economy affects inflation (0.10).
-- \((y_t - \bar{y})\): The "Output Gap" - the difference between current activity and potential.
-- \(\epsilon_\pi\): A random shock to inflation (from -0.25% to +0.25%).
+- `$\pi_t$`: Inflation this turn.
+- `$\beta$`: How "sticky" or persistent inflation is (0.60).
+- `$\pi_{t-1}$`: Inflation from the *previous* turn.
+- `$\kappa$`: How much a booming/slumping economy affects inflation (0.10).
+- `$(y_t - \bar{y})$`: The "Output Gap" - the difference between current activity and potential.
+- `$\epsilon_\pi$`: A random shock to inflation (from -0.25% to +0.25%).
 
 #### 3. The Taylor Rule (The Central Bank's Policy)
 
-This is the Central Bank's rule for setting the *next* turn's interest rate (`i`). It's a formula that reacts to the current state of the economy.
+This is the Central Bank's rule for setting the *next* turn's interest rate (`$i_t$`). It's a formula that reacts to the current state of the economy.
 
-\[ i_t = \max(0, \bar{r} + \pi_t + \phi_\pi(\pi_t - \pi^*) + \phi_y(y_t - \bar{y})) \]
+```math
+i_t = \max(0, \bar{r} + \pi_t + \phi_\pi(\pi_t - \pi^*) + \phi_y(y_t - \bar{y}))
+```
 
-- \(i_t\): The interest rate for the *next* turn.
-- \(\max(0, ...)\): This enforces the **Zero Lower Bound**. The interest rate cannot go below 0%.
-- \(\bar{r}\): The natural real rate of interest (2%).
-- \(\pi_t\): The current inflation rate.
-- \(\phi_\pi\): How aggressively the bank reacts to inflation being off-target (1.5).
-- \((\pi_t - \pi^*)\): The "Inflation Gap" - the difference between current inflation and the target (2%).
-- \(\phi_y\): How aggressively the bank reacts to an output gap (0.25).
-- \((y_t - \bar{y})\): The current Output Gap.
+- `$i_t$`: The interest rate for the *next* turn.
+- `$\max(0, ...)$`: This enforces the **Zero Lower Bound**. The interest rate cannot go below 0%.
+- `$\bar{r}$`: The natural real rate of interest (2%).
+- `$\pi_t$`: The current inflation rate.
+- `$\phi_\pi$`: How aggressively the bank reacts to inflation being off-target (1.5).
+- `$(\pi_t - \pi^*)$`: The "Inflation Gap" - the difference between current inflation and the target (2%).
+- `$\phi_y$`: How aggressively the bank reacts to an output gap (0.25).
+- `$(y_t - \bar{y})$`: The current Output Gap.
 
 ## 4. Economic Consequences in the Game
 
