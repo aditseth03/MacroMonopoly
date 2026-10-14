@@ -221,3 +221,10 @@ table.mini tr.hl td { font-weight: 700; color: var(--accent); }
     .game-container { flex-direction: column; align-items: center; }
     .info-container { width: 100%; }
 }
+
+/* ---------- trading ---------- */
+.trade-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 10px 0; }
+.trade-cols h4 { margin: 0 0 6px; }
+.trade-cols label { display: block; margin: 6px 0; font-size: 0.9em; }
+.trade-lot input { width: auto; margin-right: 4px; }
+#trade-to { width: auto; margin-left: 6px; }
