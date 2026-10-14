@@ -1,0 +1,12 @@
+{
+  "name": "macro-monopoly",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Monopoly with a live New Keynesian macroeconomy",
+  "scripts": {
+    "test": "node --test test/engine.test.js",
+    "calibrate": "node scripts/calibrate.js",
+    "balance": "node scripts/balance.js 400 40 naive macro",
+    "ablation": "node scripts/ablation.js 400 40"
+  }
+}
