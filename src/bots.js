@@ -50,6 +50,60 @@
         return false;
     }
 
+    // The macro bot. With rateAware=false it keeps the same build/borrow/jail/reserve habits but
+    // ignores the forecast (always floating, no refinancing, no rate-aware buying): an ablation
+    // that isolates how much reading the macroeconomy is worth.
+    function makeMacro(rateAware) {
+        return function macro(game, p) {
+            const e = game.economy;
+            const reserve = game.nominal(100);
+            const fc = forecastFor(game);
+            const ratesRising = fc.meanI > e.i + 0.5;
+            const chooseKind = (g) => (rateAware && g.economy.fixedLoanRate() < expectedFloating(g) + 0.25 ? 'fixed' : 'floating');
+            switch (game.phase) {
+                case 'roll':
+                    if (jailDecision(game, p, true)) return true;
+                    return game.roll();
+                case 'buy': {
+                    const sq = game.squares[game.pendingBuy];
+                    const members = game.groupMembers(sq.group);
+                    const mineOrFree = members.every(s => s.owner === null || s.owner === p.id);
+                    const rich = game.valueMultiplier(sq.group) > 1.15 && ratesRising;
+                    // skip lots priced off unusually low real rates when rates are about to rise,
+                    // unless the lot keeps a monopoly in reach
+                    if (rateAware && rich && !mineOrFree) return game.pass();
+                    return p.cash - sq.value >= reserve ? game.buy() : game.pass();
+                }
+                case 'post': {
+                    if (buildAll(game, p, reserve, true, chooseKind)) return true;
+                    const loans = game.ownedBy(p.id).filter(sq => sq.loan);
+                    // refinance floating into fixed when rates are headed up
+                    const fixedNow = e.fixedLoanRate(), floatAhead = expectedFloating(game);
+                    for (const sq of rateAware ? loans : []) {
+                        if (sq.loan.kind === 'floating' && fixedNow + 0.5 < floatAhead && p.cash >= sq.loan.principal + reserve) {
+                            game.repay(p.id, sq.id);
+                            return game.borrow(p.id, sq.id, 'fixed');
+                        }
+                        if (sq.loan.kind === 'fixed' && sq.loan.rate > floatAhead + 1.0 && p.cash >= sq.loan.principal + reserve) {
+                            game.repay(p.id, sq.id);
+                            return game.borrow(p.id, sq.id, 'floating');
+                        }
+                    }
+                    // pay down the most expensive debt with idle cash, unless monopolies still need building
+                    const stillBuilding = game.monopolies(p.id).some(g => game.groupMembers(g).some(s => s.houses < 5));
+                    if (!stillBuilding) {
+                        const dear = loans.filter(sq => p.cash >= sq.loan.principal + reserve * 2)
+                            .sort((a, b) => game.loanRate(b.loan) - game.loanRate(a.loan))[0];
+                        // keep cheap fixed debt that inflation is eroding
+                        if (dear && (!rateAware || game.loanRate(dear.loan) > e.pi + 1.5)) return game.repay(p.id, dear.id);
+                    }
+                    return game.endTurn();
+                }
+            }
+            return false;
+        };
+    }
+
     // ---------- strategies ----------
     const STRATEGIES = {
         naive(game, p) {
@@ -72,56 +126,9 @@
             return false;
         },
 
-        macro(game, p) {
-            const e = game.economy;
-            const reserve = game.nominal(100);
-            const fc = forecastFor(game);
-            const ratesRising = fc.meanI > e.i + 0.5;
-            const chooseKind = (g) => (g.economy.fixedLoanRate() < expectedFloating(g) + 0.25 ? 'fixed' : 'floating');
-            switch (game.phase) {
-                case 'roll':
-                    if (jailDecision(game, p, true)) return true;
-                    return game.roll();
-                case 'buy': {
-                    const sq = game.squares[game.pendingBuy];
-                    const members = game.groupMembers(sq.group);
-                    const mineOrFree = members.every(s => s.owner === null || s.owner === p.id);
-                    const rich = game.valueMultiplier(sq.group) > 1.15 && ratesRising;
-                    // skip lots priced off unusually low real rates when rates are about to rise,
-                    // unless the lot keeps a monopoly in reach
-                    if (rich && !mineOrFree) return game.pass();
-                    return p.cash - sq.value >= reserve ? game.buy() : game.pass();
-                }
-                case 'post': {
-                    if (buildAll(game, p, reserve, true, chooseKind)) return true;
-                    const loans = game.ownedBy(p.id).filter(sq => sq.loan);
-                    // refinance floating into fixed when rates are headed up
-                    const fixedNow = e.fixedLoanRate(), floatAhead = expectedFloating(game);
-                    for (const sq of loans) {
-                        if (sq.loan.kind === 'floating' && fixedNow + 0.5 < floatAhead && p.cash >= sq.loan.principal + reserve) {
-                            game.repay(p.id, sq.id);
-                            return game.borrow(p.id, sq.id, 'fixed');
-                        }
-                        if (sq.loan.kind === 'fixed' && sq.loan.rate > floatAhead + 1.0 && p.cash >= sq.loan.principal + reserve) {
-                            game.repay(p.id, sq.id);
-                            return game.borrow(p.id, sq.id, 'floating');
-                        }
-                    }
-                    // pay down the most expensive debt with idle cash, unless monopolies still need building
-                    const stillBuilding = game.monopolies(p.id).some(g => game.groupMembers(g).some(s => s.houses < 5));
-                    if (!stillBuilding) {
-                        const dear = loans.filter(sq => p.cash >= sq.loan.principal + reserve * 2)
-                            .sort((a, b) => game.loanRate(b.loan) - game.loanRate(a.loan))[0];
-                        // keep cheap fixed debt that inflation is eroding
-                        if (dear && game.loanRate(dear.loan) > e.pi + 1.5) return game.repay(p.id, dear.id);
-                    }
-                    return game.endTurn();
-                }
-            }
-            return false;
-        },
-
+        macro: makeMacro(true),
         leverage(game, p) {
+
             const reserve = game.nominal(50);
             switch (game.phase) {
                 case 'roll':
@@ -166,7 +173,7 @@
         return ok;
     }
 
-    const api = { STRATEGIES, act, BOT_NAMES: Object.keys(STRATEGIES) };
+    const api = { STRATEGIES, act, makeMacro, BOT_NAMES: Object.keys(STRATEGIES) };
     if (isNode) module.exports = api;
     else root.MM = Object.assign(root.MM || {}, api);
 })(typeof self !== 'undefined' ? self : this);

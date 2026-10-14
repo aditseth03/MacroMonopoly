@@ -105,8 +105,22 @@ node scripts/balance.js 400 40 naive macro      # 400 heads-up games, 40 quarter
 npm test                                        # engine + rules + balance tests (Node 18+)
 ```
 
-Over 400 heads-up games of 40 quarters, the macro-aware bot beats the naive bot about 61% of the time. The
-leveraged bot does about 55%. Reading the macro pays, but luck still matters.
+Over 400 heads-up games of 40 quarters, the macro bot beats the naive bot about 61% of the time, and the
+leveraged bot does about 55%. Most of that edge comes from *habits* (borrowing to build, sitting in Jail late)
+rather than from reading the economy. `node scripts/ablation.js` plays the macro bot against an identical bot
+that ignores the forecast (always floating, no refinancing, no rate-aware buying). The forecast-reading
+version wins only about 53%. Making the macro levers bite harder is the main open design problem; see below.
+
+## Known limitations / next steps
+
+- **No trading or auctions yet**, so monopolies are rare. Heads-up games end with about 9 buildings on
+  the board, and four-player games with about 7. Trading is the biggest missing piece; it would make
+  building, and therefore leverage and rate timing, matter much more.
+- **The macro edge is small (about +3–6pp).** Candidates to widen it: higher loan-to-value, a
+  rate-sensitive house-building cost, or property sales back to the bank at market value, so that timing
+  the asset-price cycle pays.
+- **The zero lower bound rarely binds in play** (about 0.1–2% of quarters). Large negative shock cards or a
+  lower $r^*$ would bring it into games more often.
 
 ## Code layout
 

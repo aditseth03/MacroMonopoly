@@ -494,6 +494,6 @@
             initCharts();
             renderCharts();
         });
-        window.MMUI = { get game() { return game; } }; // handy for debugging in the console
+        window.MMUI = { get game() { return game; }, render: renderAll }; // handy for debugging in the console
     });
 })();
