@@ -95,7 +95,7 @@ test('going to jail does not skip the next player (v1 advanced twice)', () => {
 });
 
 test('three doubles in a row sends you to jail; doubles grant another roll', () => {
-    const g = two();
+    const g = two({ auctions: false });
     g.rollDice = function () { this.dice = [3, 3]; return this.dice; };
     g.roll(); if (g.phase === 'buy') g.pass();
     g.endTurn(); assert.strictEqual(g.phase, 'roll'); assert.strictEqual(g.current, 0);
@@ -161,4 +161,62 @@ test('balance: the macro-aware bot beats the naive bot often, but not always', (
     const macro = r.byStrategy.find(s => s.strategy === 'macro');
     assert.ok(macro.winRate > 0.52 && macro.winRate < 0.8, `macro win rate ${macro.winRate}`);
     assert.ok(Math.abs(r.macro.meanPi - 2) < 0.5, `mean inflation ${r.macro.meanPi}`);
+});
+
+// ---------- auctions and trading ----------
+test('passing on a lot starts a sealed second-price auction', () => {
+    const g = two();
+    g.pendingBuy = 39; g.phase = 'buy';
+    g.pass();
+    assert.strictEqual(g.phase, 'auction');
+    assert.deepStrictEqual(g.auctionWaiting(), [0, 1, 2]);
+    g.bid(0, 0); g.bid(1, 300); g.bid(2, 250);
+    assert.strictEqual(g.squares[39].owner, 1);
+    assert.strictEqual(g.players[1].cash, 1500 - 251, 'winner pays second bid + 1');
+    assert.strictEqual(g.phase, 'post');
+});
+
+test('auction with no bids leaves the lot with the bank; bids are capped at cash', () => {
+    const g = two();
+    g.pendingBuy = 1; g.phase = 'buy'; g.pass();
+    g.bid(0, 0); g.bid(1, 5); g.bid(2, 0); // 5 is under the minimum bid
+    assert.strictEqual(g.squares[1].owner, null);
+    g.pendingBuy = 3; g.phase = 'buy'; g.pass();
+    g.bid(0, 99999); g.bid(1, 0); g.bid(2, 0);
+    assert.strictEqual(g.squares[3].owner, 0);
+    assert.ok(g.players[0].cash >= 0);
+});
+
+test('trades move lots, loans and cash; lots in built-up groups are blocked', () => {
+    const g = two();
+    g.phase = 'post';
+    g.squares[1].owner = 0; g.squares[3].owner = 1; g.squares[39].owner = 1;
+    g.squares[39].loan = { kind: 'fixed', principal: 200, rate: 3 };
+    assert.ok(g.proposeTrade({ from: 0, to: 1, give: [], get: [3, 39], cash: 100 }));
+    assert.strictEqual(g.phase, 'trade');
+    g.respondTrade(true);
+    assert.strictEqual(g.phase, 'post');
+    assert.strictEqual(g.squares[39].owner, 0);
+    assert.strictEqual(g.squares[39].loan.rate, 3, 'loan travels with the lot');
+    assert.strictEqual(g.players[0].cash, 1400);
+    assert.strictEqual(g.players[1].cash, 1600);
+    g.squares[1].houses = 1;
+    assert.ok(!g.proposeTrade({ from: 0, to: 1, give: [3], get: [], cash: 0 }));
+    assert.match(g.lastTradeError, /buildings/);
+});
+
+test('a rejected trade changes nothing', () => {
+    const g = two();
+    g.phase = 'roll';
+    g.squares[1].owner = 1;
+    g.proposeTrade({ from: 0, to: 1, give: [], get: [1], cash: 50 });
+    g.respondTrade(false);
+    assert.strictEqual(g.squares[1].owner, 1);
+    assert.strictEqual(g.players[0].cash, 1500);
+    assert.strictEqual(g.phase, 'roll');
+});
+
+test('bots trade to complete colour groups, so buildings actually get built', () => {
+    const r = tournament({ strategies: ['naive', 'macro', 'leverage', 'naive'], games: 40, rounds: 40, seed: 300 });
+    assert.ok(r.macro.housesAtEnd > 15, `buildings at end ${r.macro.housesAtEnd}`);
 });

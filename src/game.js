@@ -1,8 +1,11 @@
 // game.js - the rules of Macro Monopoly as a DOM-free state machine. The browser UI,
 // the bots and the headless simulator all drive the same Game object.
 //
-// Turn phases:  'roll'   -> current player may manage assets, then roll (or pay bail if jailed)
+// Turn phases:  'roll'   -> current player may manage assets and trade, then roll (or pay bail if jailed)
 //               'buy'    -> landed on an unowned lot: buy() or pass()
+//               'auction'-> a passed/unaffordable lot is auctioned: every solvent player bid()s once
+//                           (sealed bids, winner pays the second-highest bid + $1)
+//               'trade'  -> a trade offer awaits respondTrade() from its recipient
 //               'post'   -> after landing: manage assets, then endTurn() (or roll again on doubles)
 //               'policy' -> Fed Chair mode only: the chair sets the policy rate for the quarter
 //               'over'   -> game finished
@@ -25,6 +28,8 @@
         impulseScale: 0.1,        // pp of output gap per 1% of real wealth borrowed/invested
         loanToValue: 0.5,
         bail: 50,
+        auctions: true,
+        trading: true,
     };
 
     const TOKEN_COLORS = ['#e4572e', '#2e86ab', '#3bb273', '#f3a712', '#8e44ad', '#d81b60'];
@@ -56,6 +61,9 @@
             this.dice = [1, 1];
             this.rolledDoubles = false;
             this.pendingBuy = null;
+            this.pendingAuction = null;
+            this.auction = null;
+            this.trade = null;
             this.flow = this.newFlow();
             this.log = [];
             this.winner = null;
@@ -271,6 +279,11 @@
             if (this.phase === 'over') return true;
             if (this.player.bankrupt) { this.endTurn(true); return true; }
             if (this.pendingBuy !== null) { this.phase = 'buy'; return true; }
+            if (this.pendingAuction !== null) {
+                const id = this.pendingAuction;
+                this.pendingAuction = null;
+                return this.startAuction(id);
+            }
             this.phase = 'post';
             return true;
         }
@@ -297,7 +310,10 @@
                 case 'property': case 'railroad': case 'utility':
                     if (sq.owner === null) {
                         if (p.cash >= sq.value) this.pendingBuy = sq.id;
-                        else this.say(`${p.name} cannot afford ${sq.name} ($${sq.value}).`);
+                        else {
+                            this.say(`${p.name} cannot afford ${sq.name} ($${sq.value}).`);
+                            this.pendingAuction = sq.id;
+                        }
                     } else if (sq.owner !== p.id) {
                         const rent = this.rentFor(sq, diceTotal);
                         this.pay(p, rent, this.players[sq.owner], `rent on ${sq.name}`);
@@ -326,9 +342,116 @@
         }
         pass() {
             if (this.phase !== 'buy') return false;
-            this.say(`${this.player.name} passed on ${this.squares[this.pendingBuy].name}.`);
+            const id = this.pendingBuy;
+            this.say(`${this.player.name} passed on ${this.squares[id].name}.`);
             this.pendingBuy = null;
+            return this.startAuction(id);
+        }
+
+        // ---------- auctions ----------
+        startAuction(sqId) {
+            if (!this.s.auctions) { this.phase = 'post'; return true; }
+            const sq = this.squares[sqId];
+            this.auction = { sqId, minBid: this.nominal(10), bids: {} };
+            this.phase = 'auction';
+            this.say(`${sq.name} goes to auction (worth $${sq.value}; minimum bid $${this.auction.minBid}).`, 'economic-event');
+            return true;
+        }
+        // Solvent players who still have to bid, in seat order starting from the current player.
+        auctionWaiting() {
+            if (this.phase !== 'auction') return [];
+            const n = this.players.length, out = [];
+            for (let k = 0; k < n; k++) {
+                const p = this.players[(this.current + k) % n];
+                if (!p.bankrupt && !(p.id in this.auction.bids)) out.push(p.id);
+            }
+            return out;
+        }
+        bid(pid, amount) {
+            if (this.phase !== 'auction') return false;
+            const p = this.players[pid];
+            if (!p || p.bankrupt || pid in this.auction.bids) return false;
+            let a = Math.floor(Math.min(Number(amount) || 0, p.cash));
+            if (a < this.auction.minBid) a = 0;
+            this.auction.bids[pid] = a;
+            if (this.auctionWaiting().length === 0) this.resolveAuction();
+            return true;
+        }
+        resolveAuction() {
+            const a = this.auction, sq = this.squares[a.sqId], n = this.players.length;
+            const seatOrder = (pid) => (pid - this.current + n) % n; // ties go to the earlier seat
+            const ranked = Object.entries(a.bids).map(([pid, b]) => ({ pid: +pid, b }))
+                .filter(x => x.b > 0).sort((x, y) => y.b - x.b || seatOrder(x.pid) - seatOrder(y.pid));
+            if (!ranked.length) {
+                this.say(`No bids: ${sq.name} stays with the bank.`);
+            } else {
+                const price = Math.min(ranked[0].b, Math.max(a.minBid, ranked.length > 1 ? ranked[1].b + 1 : a.minBid));
+                const w = this.players[ranked[0].pid];
+                w.cash -= price;
+                sq.owner = w.id;
+                this.say(`${w.name} wins the auction for ${sq.name} at $${price}` +
+                    (ranked.length > 1 ? ` (next bid $${ranked[1].b}).` : '.'), 'success');
+            }
+            this.auction = null;
             this.phase = 'post';
+        }
+
+        // ---------- trading ----------
+        // offer = { from, to, give: [sqIds from -> to], get: [sqIds to -> from], cash }
+        // cash > 0: `from` pays `to`; cash < 0: `to` pays `from`. Loans travel with their lots.
+        canTradeLot(pid, sq) {
+            return !!sq && sq.owner === pid && !!sq.price && this.groupMembers(sq.group).every(s => s.houses === 0);
+        }
+        tradeError(o) {
+            if (!this.s.trading) return 'Trading is off.';
+            if (!o || o.from !== this.current || !(this.phase === 'roll' || this.phase === 'post' || this.phase === 'trade')) return 'You can only trade on your own turn.';
+            const A = this.players[o.from], B = this.players[o.to];
+            if (!B || o.from === o.to || A.bankrupt || B.bankrupt) return 'Pick another solvent player.';
+            const give = o.give || [], get = o.get || [], cash = Math.round(o.cash || 0);
+            if (!give.length && !get.length) return 'A trade must include at least one property.';
+            if (give.some(id => !this.canTradeLot(o.from, this.squares[id]))) return 'You can only offer your own lots, with no buildings in their colour group.';
+            if (get.some(id => !this.canTradeLot(o.to, this.squares[id]))) return `You can only ask for ${B.name}'s lots with no buildings in their colour group.`;
+            if (cash > 0 && A.cash < cash) return `${A.name} doesn't have $${cash}.`;
+            if (cash < 0 && B.cash < -cash) return `${B.name} doesn't have $${-cash}.`;
+            return null;
+        }
+        describeTrade(o) {
+            const names = (ids) => ids.map(id => this.squares[id].name + (this.squares[id].loan
+                ? ` (with its $${this.squares[id].loan.principal} ${this.squares[id].loan.kind} loan)` : '')).join(', ');
+            const A = this.players[o.from].name, B = this.players[o.to].name, parts = [];
+            if (o.give && o.give.length) parts.push(`${A} gives ${names(o.give)}`);
+            if (o.get && o.get.length) parts.push(`${B} gives ${names(o.get)}`);
+            if (o.cash > 0) parts.push(`${A} pays $${o.cash}`);
+            if (o.cash < 0) parts.push(`${B} pays $${-o.cash}`);
+            return parts.join('; ');
+        }
+        proposeTrade(offer) {
+            const o = { from: offer.from, to: offer.to, give: (offer.give || []).slice(), get: (offer.get || []).slice(), cash: Math.round(offer.cash || 0) };
+            const err = this.phase === 'trade' ? 'A trade is already pending.' : this.tradeError(o);
+            this.lastTradeError = err;
+            if (err) return false;
+            this.trade = Object.assign(o, { returnPhase: this.phase });
+            this.phase = 'trade';
+            this.say(`Trade offer to ${this.players[o.to].name}: ${this.describeTrade(o)}.`, 'card-draw');
+            return true;
+        }
+        respondTrade(accept) {
+            if (this.phase !== 'trade') return false;
+            const o = this.trade;
+            const err = accept ? this.tradeError(o) : null;
+            this.phase = o.returnPhase;
+            this.trade = null;
+            this.lastTrade = { offer: o, accepted: !!accept && !err, round: this.round };
+            if (!accept || err) {
+                this.say(`${this.players[o.to].name} rejected the trade${err ? ` (${err})` : ''}.`);
+                return true;
+            }
+            const A = this.players[o.from], B = this.players[o.to];
+            o.give.forEach(id => { this.squares[id].owner = B.id; });
+            o.get.forEach(id => { this.squares[id].owner = A.id; });
+            A.cash -= o.cash;
+            B.cash += o.cash;
+            this.say(`Trade done: ${this.describeTrade(o)}.`, 'success');
             return true;
         }
 

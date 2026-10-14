@@ -116,10 +116,12 @@
 
         const p = game.player;
         const human = p.type === 'human';
-        const policyHuman = game.phase === 'policy' && game.players[game.chair].type === 'human';
+        const waiting = humanDecision();
         let prompt = '';
         if (game.phase === 'over') prompt = `${esc(game.players[game.winner].name)} wins!`;
         else if (game.phase === 'policy') prompt = `${esc(game.players[game.chair].name)} is setting the policy rate…`;
+        else if (game.phase === 'auction') prompt = `Auction: ${esc(game.squares[game.auction.sqId].name)}${waiting ? ` (${esc(game.players[waiting.pid].name)} to bid)` : ''}…`;
+        else if (game.phase === 'trade') prompt = `${esc(game.players[game.trade.to].name)} is considering a trade offer…`;
         else if (!human) prompt = `${esc(p.name)} (bot) is thinking…`;
         else if (game.phase === 'buy') {
             const sq = game.squares[game.pendingBuy];
@@ -132,15 +134,20 @@
             $(id).hidden = !on;
             $(id).disabled = !enabled;
         };
-        const can = human && game.phase !== 'over' && game.phase !== 'policy';
+        const can = human && (game.phase === 'roll' || game.phase === 'buy' || game.phase === 'post');
         show('btn-roll', can && game.phase === 'roll');
         show('btn-bail', can && game.phase === 'roll' && p.inJail, p.jailCards > 0 || p.cash >= game.bailCost());
         $('btn-bail').textContent = p.jailCards > 0 ? 'Use jail card' : `Pay bail (${money(game.bailCost())})`;
         show('btn-buy', can && game.phase === 'buy');
         show('btn-pass', can && game.phase === 'buy');
         show('btn-manage', can && (game.phase === 'roll' || game.phase === 'post'));
+        show('btn-trade', can && game.s.trading && (game.phase === 'roll' || game.phase === 'post'));
         show('btn-end', can && game.phase === 'post');
-        if (policyHuman && !$('modal').classList.contains('open')) showPolicy();
+        if (waiting && !$('modal').classList.contains('open')) {
+            if (waiting.kind === 'policy') showPolicy();
+            else if (waiting.kind === 'auction') showAuction(waiting.pid);
+            else if (waiting.kind === 'trade') showTradeResponse();
+        }
         if (game.phase === 'over' && !game._overShown) { game._overShown = true; showGameOver(); }
     }
 
@@ -317,9 +324,114 @@
     function closeModal() {
         $('modal').classList.remove('open');
         $('modal').setAttribute('aria-hidden', 'true');
-        if (game && game.phase === 'policy' && game.players[game.chair].type === 'human') {
-            setTimeout(renderCentre, 0); // the chair must still decide; reopen
+        if (humanDecision()) setTimeout(renderCentre, 0); // a decision is still owed; reopen
+    }
+
+    // A decision a human must make outside the normal turn buttons (Fed Chair, auction bid,
+    // answering a trade offer), or null.
+    function humanDecision() {
+        if (!game) return null;
+        const isHuman = (pid) => game.players[pid].type === 'human';
+        if (game.phase === 'policy' && isHuman(game.chair)) return { kind: 'policy', pid: game.chair };
+        if (game.phase === 'auction') {
+            const waitingBots = game.auctionWaiting().filter(pid => !isHuman(pid));
+            const human = game.auctionWaiting().find(isHuman);
+            if (!waitingBots.length && human !== undefined) return { kind: 'auction', pid: human };
         }
+        if (game.phase === 'trade' && isHuman(game.trade.to)) return { kind: 'trade', pid: game.trade.to };
+        return null;
+    }
+    const decided = () => { closeModal(); renderAll(); scheduleBots(); };
+
+    function lotLine(sq) {
+        const loan = sq.loan ? ` · ${sq.loan.kind} loan ${money(sq.loan.principal)}${sq.loan.kind === 'fixed' ? ' @ ' + fmt(sq.loan.rate) + '%' : ''}` : '';
+        return `<span class="chip g-${sq.group}"></span>${esc(sq.name)} <span class="muted">${money(sq.value)}${loan}</span>`;
+    }
+
+    function showAuction(pid) {
+        const p = game.players[pid], a = game.auction, sq = game.squares[a.sqId];
+        const others = game.players.filter(o => !o.bankrupt && o.id !== pid && o.type === 'human').length;
+        openModal(`<h3>Auction: ${lotLine(sq)}</h3>
+            ${others ? `<p class="warn">Sealed bid: pass the device to <b>${esc(p.name)}</b>.</p>` : ''}
+            <p>${esc(p.name)}, enter the most you'd pay. Bids are sealed and the winner pays the
+            second-highest bid + $1, so bidding your true value is the best strategy.
+            Cash: <b>${money(p.cash)}</b>. Minimum bid ${money(a.minBid)}.</p>
+            <label class="slider">Your maximum bid ($)<input type="number" id="bid-in" min="0" max="${p.cash}" value="${Math.min(p.cash, sq.value)}"></label>
+            <div class="btns"><button id="bid-pass">Don't bid</button><button id="bid-go" class="primary">Place bid</button></div>`);
+        $('bid-pass').addEventListener('click', () => { game.bid(pid, 0); decided(); });
+        $('bid-go').addEventListener('click', () => { game.bid(pid, +$('bid-in').value); decided(); });
+    }
+
+    function showTradeResponse() {
+        const o = game.trade, A = game.players[o.from], B = game.players[o.to];
+        const list = (ids) => ids.length ? ids.map(id => `<div>${lotLine(game.squares[id])}</div>`).join('') : '<div class="muted">nothing</div>';
+        const cashTo = o.cash > 0 ? `<div><b>${money(o.cash)}</b> cash</div>` : '';
+        const cashFrom = o.cash < 0 ? `<div><b>${money(-o.cash)}</b> cash</div>` : '';
+        openModal(`<h3>${esc(A.name)} offers ${esc(B.name)} a trade</h3>
+            <div class="trade-cols">
+                <div><h4>${esc(B.name)} receives</h4>${list(o.give)}${cashTo}</div>
+                <div><h4>${esc(B.name)} gives</h4>${list(o.get)}${cashFrom}</div>
+            </div>
+            <p class="muted">Loans travel with their lots: you take over (or hand over) the debt and its rate.</p>
+            <div class="btns"><button id="trade-no">Reject</button><button id="trade-yes" class="primary">Accept</button></div>`);
+        $('trade-no').addEventListener('click', () => { game.respondTrade(false); decided(); });
+        $('trade-yes').addEventListener('click', () => { game.respondTrade(true); decided(); });
+    }
+
+    function showTrade(state = {}) {
+        const me = game.player;
+        const partners = game.activePlayers().filter(o => o.id !== me.id);
+        const to = state.to !== undefined ? state.to : partners[0].id;
+        const them = game.players[to];
+        const box = (pid, side) => {
+            const lots = game.ownedBy(pid).filter(sq => sq.price);
+            if (!lots.length) return '<p class="muted">No properties.</p>';
+            return lots.map(sq => {
+                const ok = game.canTradeLot(pid, sq);
+                const checked = (state[side] || []).includes(sq.id) ? 'checked' : '';
+                return `<label class="trade-lot ${ok ? '' : 'muted'}"><input type="checkbox" data-side="${side}" value="${sq.id}" ${checked} ${ok ? '' : 'disabled'}> ${lotLine(sq)}${ok ? '' : ' (has buildings in group)'}</label>`;
+            }).join('');
+        };
+        openModal(`<h3>Propose a trade</h3>
+            <label>Trade with <select id="trade-to">${partners.map(o => `<option value="${o.id}" ${o.id === to ? 'selected' : ''}>${esc(o.name)}${o.type === 'human' ? '' : ' (bot)'}</option>`).join('')}</select></label>
+            <div class="trade-cols">
+                <div><h4>You give</h4>${box(me.id, 'give')}<label>Cash you pay ($)<input type="number" id="trade-pay" min="0" value="${state.pay || 0}"></label></div>
+                <div><h4>You get from ${esc(them.name)}</h4>${box(to, 'get')}<label>Cash they pay ($)<input type="number" id="trade-recv" min="0" value="${state.recv || 0}"></label></div>
+            </div>
+            <p class="muted">Lots carry their loans with them. Lots in a colour group with buildings can't be traded.
+                You have ${money(me.cash)}; ${esc(them.name)} has ${money(them.cash)}.</p>
+            <p id="trade-msg" class="${state.msgClass || ''}">${state.msg || ''}</p>
+            <div class="btns">${them.type === 'human' ? '' : '<button id="trade-quote">What would they accept?</button>'}<button id="trade-send" class="primary">Propose</button></div>`);
+        const read = () => ({
+            to: +$('trade-to').value,
+            give: [...document.querySelectorAll('#modal-body input[data-side="give"]:checked')].map(x => +x.value),
+            get: [...document.querySelectorAll('#modal-body input[data-side="get"]:checked')].map(x => +x.value),
+            pay: Math.max(0, Math.round(+$('trade-pay').value || 0)),
+            recv: Math.max(0, Math.round(+$('trade-recv').value || 0)),
+        });
+        const offerOf = (st) => ({ from: me.id, to: st.to, give: st.give, get: st.get, cash: st.pay - st.recv });
+        $('trade-to').addEventListener('change', () => showTrade({ to: +$('trade-to').value }));
+        if ($('trade-quote')) $('trade-quote').addEventListener('click', () => {
+            const st = read();
+            if (!st.give.length && !st.get.length) return showTrade(Object.assign(st, { msg: 'Pick at least one property.', msgClass: 'warn' }));
+            const q = MM.tradeQuote(game, offerOf(st));
+            const msg = q.needCash > 0
+                ? `${them.name} would accept if you pay at least ${money(q.needCash)} in total.`
+                : `${them.name} would accept even if they pay you up to ${money(-q.needCash)}.`;
+            showTrade(Object.assign(st, { msg }));
+        });
+        $('trade-send').addEventListener('click', () => {
+            const st = read();
+            if (!game.proposeTrade(offerOf(st))) return showTrade(Object.assign(st, { msg: game.lastTradeError, msgClass: 'warn' }));
+            if (them.type !== 'human') {
+                MM.act(game); // the bot answers straight away
+                const ok = game.lastTrade && game.lastTrade.accepted;
+                renderAll();
+                return showTrade({ to: st.to, msg: ok ? 'Accepted! The trade is done.' : `${them.name} rejected the offer.`, msgClass: ok ? '' : 'warn' });
+            }
+            closeModal();
+            renderAll();
+        });
     }
 
     function showProperty(id) {
@@ -480,6 +592,7 @@
         $('btn-pass').addEventListener('click', () => humanAction(() => game.pass()));
         $('btn-end').addEventListener('click', () => humanAction(() => game.endTurn()));
         $('btn-manage').addEventListener('click', () => game && showManage());
+        $('btn-trade').addEventListener('click', () => game && showTrade());
         $('run-simulation').addEventListener('click', runSimulation);
         $('setup').querySelector('h2').addEventListener('click', () => $('setup').classList.toggle('collapsed'));
         document.querySelector('#modal .close').addEventListener('click', closeModal);

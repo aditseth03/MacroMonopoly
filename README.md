@@ -11,7 +11,7 @@ and bots, then play.
 - **One round of turns = one quarter.** The game runs for a fixed number of quarters (default 40, i.e. ten
   years). **The winner has the highest _real_ net worth**: cash + property + buildings − loans, deflated by
   the price level. Going bankrupt knocks you out early.
-- Classic Monopoly rules otherwise: rent tables, houses and hotels on full colour groups (built evenly),
+- Classic Monopoly rules otherwise (including auctions and trading, below): rent tables, houses and hotels on full colour groups (built evenly),
   double rent on unimproved monopolies, doubles roll again, three doubles send you to Jail, and bail or three
   tries to roll out of Jail.
 
@@ -29,6 +29,25 @@ and bots, then play.
 earning rent: it's a real loan, not a sale. Interest is charged every quarter. If you can't pay, buildings are
 sold, then more lots are mortgaged, and then you're bankrupt. A bankrupt player's lots (and their loans) pass
 to the creditor.
+
+### Auctions and trading
+
+- **Auctions.** A lot nobody buys, because the lander passed or couldn't afford it, goes to a sealed-bid
+  auction among all solvent players. The highest bid wins and pays the *second-highest bid + $1*, so
+  bidding exactly what the lot is worth to you is the best strategy. With several humans, pass the device
+  for each sealed bid.
+- **Trading.** On your turn (before or after rolling), click **Trade** to offer any mix of lots and cash to
+  another player. Lots in a colour group with buildings can't be traded until the buildings are sold.
+  **Loans travel with their lots:** the buyer takes over the debt and its rate. A fixed-rate loan
+  locked in when rates were low is an asset worth paying for, and a floating loan before a hiking
+  cycle is a liability to offload.
+- With a bot, click **What would they accept?** for its price before proposing. Bots also make their own
+  offers to complete colour groups, at most one per turn, and won't pester a human about the same group
+  more than once every four quarters.
+
+How bots value a deal: equity in each lot, plus a premium for completing a colour group (it unlocks
+building), minus a penalty for every group an opponent completes. Both terms shrink as the game nears
+its end. The macro-aware bot also prices the rate gap on fixed-rate loans.
 
 ### Exogenous Shock cards (replace Chance)
 
@@ -105,17 +124,20 @@ node scripts/balance.js 400 40 naive macro      # 400 heads-up games, 40 quarter
 npm test                                        # engine + rules + balance tests (Node 18+)
 ```
 
-Over 400 heads-up games of 40 quarters, the macro bot beats the naive bot about 61% of the time, and the
-leveraged bot does about 55%. Most of that edge comes from *habits* (borrowing to build, sitting in Jail late)
-rather than from reading the economy. `node scripts/ablation.js` plays the macro bot against an identical bot
-that ignores the forecast (always floating, no refinancing, no rate-aware buying). The forecast-reading
-version wins only about 53%. Making the macro levers bite harder is the main open design problem; see below.
+With trading and auctions on, over 400 heads-up games of 40 quarters, the macro bot beats the naive bot
+about 74% of the time. The naive bot goes bankrupt in about half of those games because it never borrows
+to build. In four-player games, the macro and leveraged bots each win about 36%, against 25% for an even
+split, and buildings at game end rise from about 7 (no trading) to about 34.
+
+Most of the macro bot's edge comes from *habits* (borrowing to build, sitting in Jail late) rather than
+from reading the economy. `node scripts/ablation.js` plays the macro bot against an identical bot that
+ignores the forecast (always floating, no refinancing, no rate-aware buying). The forecast-reading version
+wins only about 51–53%. Making the macro levers bite harder is the main open design problem; see below.
 
 ## Known limitations / next steps
 
-- **No trading or auctions yet**, so monopolies are rare. Heads-up games end with about 9 buildings on
-  the board, and four-player games with about 7. Trading is the biggest missing piece; it would make
-  building, and therefore leverage and rate timing, matter much more.
+- **Bots don't counter-offer,** and they don't propose trades that don't complete a colour group for
+  them. A human can haggle with the quote button, but a bot never comes back with a counter-proposal.
 - **The macro edge is small (about +3–6pp).** Candidates to widen it: higher loan-to-value, a
   rate-sensitive house-building cost, or property sales back to the bank at market value, so that timing
   the asset-price cycle pays.
